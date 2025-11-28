@@ -1,4 +1,4 @@
-# Medical Edge Scraper for BlueStacks
+# Scraper for BlueStacks
 
 BlueStacksエミュレータ上で動作するAndroidアプリの画面を自動で保存（スクリーンショット収集）するためのPythonツールです。
 主に、電子書籍や学習アプリの個人的なアーカイブ（自炊）を効率化する目的で作成されました。
