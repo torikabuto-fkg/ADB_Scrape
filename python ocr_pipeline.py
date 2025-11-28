@@ -1,90 +1,132 @@
 import os
 import glob
 import img2pdf
-import easyocr
+import paddle # 追加: GPU設定用
+from paddleocr import PaddleOCR
 from natsort import natsorted
 from docx import Document
-from tqdm import tqdm # 進捗バー表示用
+from tqdm import tqdm
+import logging
 
-# --- 設定 ---
+# ログ抑制
+logging.getLogger("ppocr").setLevel(logging.WARNING)
+
+# --- 設定エリア ---
 IMAGE_DIR = "./hokuto_scrapes/"   # 画像の保存先
-OUTPUT_DIR = "./output"     # 出力先
-PDF_FILENAME = "output.pdf"
-DOCX_FILENAME = "output.docx"
-TXT_FILENAME = "output_raw_text.txt"
+OUTPUT_DIR = "./koshigayashiritsu"     # 出力先
+PDF_FILENAME = "koshigayashiritsu_reviews.pdf"
+DOCX_FILENAME = "koshigayashiritsu_reviews.docx"
+TXT_FILENAME = "koshigayashiritsu_raw_text.txt"
+
+CONFIDENCE_THRESHOLD = 0.6 
 
 def main():
     if not os.path.exists(OUTPUT_DIR):
         os.makedirs(OUTPUT_DIR)
 
-    # 1. 画像リストの取得とソート
-    # natsortedを使うことで page_001 -> page_002 -> page_010 の順序を保証
+    # 1. GPU設定 (ここが修正ポイント)
+    # CUDAが使える環境ならGPUを、だめならCPUを自動選択させたい場合はここを調整
+    try:
+        paddle.set_device('gpu') 
+        print("✅ GPUモードで動作します")
+    except Exception as e:
+        print("⚠️ GPUが見つからないか設定できませんでした。CPUで動作します。")
+        print(f"エラー詳細: {e}")
+        paddle.set_device('cpu')
+
+    # 2. 画像リスト取得
     img_paths = natsorted(glob.glob(os.path.join(IMAGE_DIR, "*.png")))
-    
     if not img_paths:
-        print("画像が見つかりません。ディレクトリを確認してください。")
+        print(f"エラー: '{IMAGE_DIR}' に画像が見つかりません。")
         return
 
-    print(f"画像枚数: {len(img_paths)}枚")
+    print(f"対象画像: {len(img_paths)}枚")
 
-    # ---------------------------------------------------------
-    # Step 1: PDF化 (Goodnotesなどで読む用)
-    # ---------------------------------------------------------
+    # =========================================================
+    # Phase 1: PDF作成
+    # =========================================================
+    # ※ alpha channel のログは無視して大丈夫です
     print("\n[1/3] PDFを作成しています...")
     pdf_path = os.path.join(OUTPUT_DIR, PDF_FILENAME)
     
-    with open(pdf_path, "wb") as f:
-        # 画像データをそのままPDFバイナリに変換（劣化なし）
-        f.write(img2pdf.convert(img_paths))
-    
-    print(f" -> PDF保存完了: {pdf_path}")
+    try:
+        with open(pdf_path, "wb") as f:
+            f.write(img2pdf.convert(img_paths))
+        print(f"  -> PDF保存完了: {pdf_path}")
+    except Exception as e:
+        print(f"  -> PDF作成エラー: {e}")
 
-    # ---------------------------------------------------------
-    # Step 2: OCR処理 (EasyOCR by GPU)
-    # ---------------------------------------------------------
-    print("\n[2/3] OCR処理を開始します (GPU使用)...")
+    # =========================================================
+    # Phase 2: PaddleOCR実行 (引数を修正)
+    # =========================================================
+    print("\n[2/3] PaddleOCRで解析しています...")
     
-    # Githubのコードと同様の設定
-    reader = easyocr.Reader(['ja', 'en'], gpu=True)
+    # 【重要修正】
+    # 1. use_gpu=True を削除 (上で set_device しているため)
+    # 2. use_angle_cls を use_textline_orientation に変更 (警告対応)
+    # 3. show_log を削除（新しいバージョンで非対応）
+    try:
+        ocr = PaddleOCR(
+            use_textline_orientation=True,  # 旧: use_angle_cls=True
+            lang='japan'
+        )
+    except Exception as e:
+        # 万が一新しい引数名が通らない場合のフォールバック
+        print("警告: 新しい引数名が非対応のため、旧引数で再試行します")
+        ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang='japan'
+        )
     
-    full_text_lines = []
+    full_text_data = []
 
-    for img_path in tqdm(img_paths):
-        # detail=0 にするとテキストのリストだけ返ってくる
-        # paragraph=True にするとある程度の塊で結合してくれる
-        result = reader.readtext(img_path, detail=0, paragraph=True)
+    for img_path in tqdm(img_paths, desc="OCR Progress"):
+        file_name = os.path.basename(img_path)
         
-        # ページごとの区切り文字を入れる（分析時にページを意識させるため）
-        full_text_lines.append(f"\n--- Page {os.path.basename(img_path)} ---\n")
-        full_text_lines.extend(result)
+        # OCR実行
+        result = ocr.ocr(img_path, cls=True)
+        
+        page_text = []
+        
+        if result and result[0]:
+            for line in result[0]:
+                text = line[1][0]
+                score = line[1][1]
+                
+                if score >= CONFIDENCE_THRESHOLD:
+                    page_text.append(text)
+        
+        full_text_data.append({
+            "filename": file_name,
+            "content": "\n".join(page_text)
+        })
 
-    # ---------------------------------------------------------
-    # Step 3: Word & Text出力
-    # ---------------------------------------------------------
-    print("\n[3/3] ファイルに出力しています...")
+    # =========================================================
+    # Phase 3: ファイル出力
+    # =========================================================
+    print("\n[3/3] 結果をファイルに書き出しています...")
 
-    # A. テキストファイル出力（LLMに投げる用）
     txt_path = os.path.join(OUTPUT_DIR, TXT_FILENAME)
-    all_text_str = "\n".join(full_text_lines)
     with open(txt_path, "w", encoding="utf-8") as f:
-        f.write(all_text_str)
-
-    # B. Wordファイル出力（人間が読む用）
+        for page in full_text_data:
+            f.write(f"--- Page: {page['filename']} ---\n")
+            f.write(page['content'])
+            f.write("\n\n")
+    
     docx_path = os.path.join(OUTPUT_DIR, DOCX_FILENAME)
     doc = Document()
-    doc.add_heading('Hokuto Reviews OCR Result', 0)
+    doc.add_heading('Hokuto Reviews (PaddleOCR)', 0)
     
-    for line in full_text_lines:
-        if line.startswith("--- Page"):
-            doc.add_heading(line.strip(), level=2)
+    for page in full_text_data:
+        doc.add_heading(f"Page: {page['filename']}", level=2)
+        if page['content'].strip():
+            doc.add_paragraph(page['content'])
         else:
-            doc.add_paragraph(line)
+            doc.add_paragraph("(テキストなし)")
             
     doc.save(docx_path)
     
-    print(f" -> Text保存完了: {txt_path}")
-    print(f" -> Word保存完了: {docx_path}")
-    print("\nすべての処理が完了しました。")
+    print(f"\n✅ 完了: {OUTPUT_DIR} を確認してください")
 
 if __name__ == "__main__":
     main()
