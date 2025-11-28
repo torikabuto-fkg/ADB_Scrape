@@ -13,10 +13,10 @@ logging.getLogger("ppocr").setLevel(logging.WARNING)
 
 # --- 設定エリア ---
 IMAGE_DIR = "./hokuto_scrapes/"   # 画像の保存先
-OUTPUT_DIR = "./koshigayashiritsu"     # 出力先
-PDF_FILENAME = "koshigayashiritsu_reviews.pdf"
-DOCX_FILENAME = "koshigayashiritsu_reviews.docx"
-TXT_FILENAME = "koshigayashiritsu_raw_text.txt"
+OUTPUT_DIR = "./"     # 出力先
+PDF_FILENAME = ".pdf"
+DOCX_FILENAME = ".docx"
+TXT_FILENAME = "_raw_text.txt"
 
 CONFIDENCE_THRESHOLD = 0.6 
 
