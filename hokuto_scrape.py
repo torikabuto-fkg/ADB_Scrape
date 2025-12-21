@@ -12,29 +12,29 @@ import random
 # "C:\" は "/mnt/c/" に変わり、バックスラッシュ "\" はスラッシュ "/" になります
 ADB_PATH = "/mnt/c/Program Files/BlueStacks_nxt/HD-Adb.exe"
 
-# ポート番号
-ADB_HOST = "XXX.0.0.X"
-ADB_PORT = "XXXX"
+# ポート番号（5556のまま）
+ADB_HOST = "127.0.0.1"
+ADB_PORT = "5556"
 ADB_ADDRESS = f"{ADB_HOST}:{ADB_PORT}"
 
 # ...以下変更なし
 
 # 保存先ディレクトリ
-OUTPUT_DIR = "./hokuto_scrapes"
+OUTPUT_DIR = "$h保存先ディレクトリ$"
 
 # 【修正】スワイプ設定 (1080x1920用・高速化)
 # 以前の設定よりも、開始点(Start)を下げ、終了点(End)を上げました。
 # これにより、一回の動作で画面の約80%を移動させます。
 
 SWIPE_START_X = 540   # 画面横幅のちょうど真ん中
-SWIPE_START_Y = 1700  # 画面のかなり下の方から掴んで...
+SWIPE_START_Y = 1600  # 画面のかなり下の方から掴んで...
 SWIPE_END_X = 540     # 真上に引き上げる
-SWIPE_END_Y = 300     # 画面の上の方まで持っていく（移動距離 1400px）
+SWIPE_END_Y = 600     # 画面の上の方まで持っていく（移動距離 1000px）
 
 # 【修正】速度設定
 # 数値が小さいほど「速いスワイプ（フリック）」になります。
 # 800ms(遅い) → 400ms(速い) に変更。慣性がついてよく進みます。
-SWIPE_DURATION = 850
+SWIPE_DURATION = 600
 
 # -----------------
 
@@ -71,6 +71,25 @@ def get_file_size(filepath):
         return os.path.getsize(filepath)
     return 0
 
+def crop_center_region(image_path, output_path):
+    """
+    画像の中央部分のみを切り抜く
+    上下20%ずつをカットして中央60%を保存
+    """
+    from PIL import Image
+    
+    img = Image.open(image_path)
+    width, height = img.size
+    
+    # 上下20%ずつカット（中央60%を残す）
+    top_cut = int(height * 0.10)
+    bottom_cut = int(height * 0.90)
+    
+    # 中央部分を切り抜き
+    cropped = img.crop((0, top_cut, width, bottom_cut))
+    cropped.save(output_path)
+    img.close()
+
 def main():
     # 1. 接続
     if not connect():
@@ -84,6 +103,7 @@ def main():
     print("-" * 40)
     print("スクレイピングを開始します。")
     print("Hokutoの口コミ画面を開いておいてください。")
+    print("※画像は中央部分のみ保存します（上下20%カット）")
     print("3秒後に開始します...")
     print("-" * 40)
     time.sleep(3)
@@ -91,18 +111,23 @@ def main():
     prev_screenshot_size = -1
     consecutive_same_size = 0
 
-    # 最大100ページ
-    for i in range(1, 101):
+    # 最大300ページ
+    for i in range(1, 301):
         filename = f"review_page_{i:03d}.png"
         local_path = os.path.join(OUTPUT_DIR, filename)
+        temp_path = os.path.join(OUTPUT_DIR, f"temp_{filename}")
         remote_path = f"/sdcard/temp_{filename}"
 
         print(f"[{i:03d}] Processing...")
 
-        # A. 撮影 & 転送
+        # A. 撮影 & 転送（一時ファイルとして保存）
         run_adb(["shell", "screencap", "-p", remote_path])
-        run_adb(["pull", remote_path, local_path])
+        run_adb(["pull", remote_path, temp_path])
         run_adb(["shell", "rm", remote_path])
+        
+        # B. 中央部分のみを切り抜いて保存
+        crop_center_region(temp_path, local_path)
+        os.remove(temp_path)  # 一時ファイルを削除
         
         # B. 終了判定（画面が動かなくなったら終了）
         current_size = get_file_size(local_path)
